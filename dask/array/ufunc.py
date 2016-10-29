@@ -17,8 +17,12 @@ def __array_wrap__(numpy_ufunc, x, *args, **kwargs):
 def wrap_elemwise(numpy_ufunc, array_wrap=False):
     """ Wrap up numpy function into dask.array """
 
-    def wrapped(x, *args, **kwargs):
+    def wrapped(*args, **kwargs):
+
         if hasattr(x, '_elemwise'):
+            elemwise = x.elemwise
+        eilf
+
             if array_wrap:
                 return x._elemwise(__array_wrap__, numpy_ufunc,
                                    x, *args, **kwargs)

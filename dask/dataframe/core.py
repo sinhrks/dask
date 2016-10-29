@@ -28,9 +28,10 @@ from ..utils import (repr_long_list, random_state_data,
                      put_lines, M)
 from ..base import Base, compute, tokenize, normalize_token
 from ..async import get_sync
+from ..metadata import _emulate, _extract_meta
 from . import methods
-from .utils import (meta_nonempty, make_meta, insert_meta_param_description,
-                    raise_on_meta_error)
+from .utils import (meta_nonempty, make_meta, insert_meta_param_description)
+
 
 no_default = '__no_default__'
 
@@ -2832,34 +2833,6 @@ def apply_concat_apply(args, chunk=None, aggregate=None, combine=None,
 
 
 aca = apply_concat_apply
-
-
-def _extract_meta(x, nonempty=False):
-    """
-    Extract internal cache data (``_meta``) from dd.DataFrame / dd.Series
-    """
-    if isinstance(x, (_Frame, Scalar)):
-        return x._meta_nonempty if nonempty else x._meta
-    elif isinstance(x, list):
-        return [_extract_meta(_x, nonempty) for _x in x]
-    elif isinstance(x, tuple):
-        return tuple([_extract_meta(_x, nonempty) for _x in x])
-    elif isinstance(x, dict):
-        res = {}
-        for k in x:
-            res[k] = _extract_meta(x[k], nonempty)
-        return res
-    else:
-        return x
-
-
-def _emulate(func, *args, **kwargs):
-    """
-    Apply a function using args / kwargs. If arguments contain dd.DataFrame /
-    dd.Series, using internal cache (``_meta``) for calculation
-    """
-    with raise_on_meta_error(funcname(func)):
-        return func(*_extract_meta(args, True), **_extract_meta(kwargs, True))
 
 
 @insert_meta_param_description

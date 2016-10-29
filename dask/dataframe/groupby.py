@@ -10,8 +10,9 @@ import pandas as pd
 
 from .core import DataFrame, Series, aca, map_partitions, no_default
 from .shuffle import shuffle
-from .utils import make_meta, insert_meta_param_description, raise_on_meta_error
+from .utils import make_meta, insert_meta_param_description
 from ..base import tokenize
+from ..metadata import raise_on_meta_error
 from ..utils import derived_from, M, funcname
 
 

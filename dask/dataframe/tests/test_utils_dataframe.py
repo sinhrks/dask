@@ -2,8 +2,8 @@ import numpy as np
 import pandas as pd
 import pandas.util.testing as tm
 import dask.dataframe as dd
-from dask.dataframe.utils import (shard_df_on_index, meta_nonempty, make_meta,
-                                  raise_on_meta_error)
+from dask.dataframe.utils import (shard_df_on_index, meta_nonempty, make_meta)
+from dask.metadata import raise_on_meta_error
 
 import pytest
 

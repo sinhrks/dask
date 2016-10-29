@@ -866,7 +866,7 @@ def test_map_blocks_dtype_inference():
     try:
         dx.map_blocks(foo)
     except Exception as e:
-        assert e.args[0].startswith("`dtype` inference failed")
+        assert e.args[0].startswith("Metadata inference failed")
         assert 'RuntimeError' in e.args[0]
     else:
         assert False, "Should have errored"
@@ -1349,7 +1349,7 @@ def test_elemwise_consistent_names():
     assert same_keys(a + b, a + b)
     assert same_keys(a + 2, a + 2)
     assert same_keys(da.exp(a), da.exp(a))
-    assert same_keys(da.exp(a, dtype='f8'), da.exp(a, dtype='f8'))
+    assert same_keys(da.exp(a), da.exp(a))
     assert same_keys(da.maximum(a, b), da.maximum(a, b))
 
 

@@ -26,6 +26,7 @@ from . import chunk
 from .slicing import slice_array
 from . import numpy_compat
 from ..base import Base, tokenize, normalize_token
+from ..metadata import _emulate
 from ..utils import (deepmap, ignoring, concrete, is_integer,
                      IndexCallable, funcname, derived_from, SerializableLock)
 from ..compatibility import unicode, long, getargspec, zip_longest, apply
@@ -437,27 +438,6 @@ def _concatenate2(arrays, axes=[]):
     return np.concatenate(arrays, axis=axes[0])
 
 
-def apply_infer_dtype(func, args, kwargs, funcname=None):
-    args = [np.ones((1,) * x.ndim, dtype=x.dtype)
-            if isinstance(x, Array) else x for x in args]
-    try:
-        o = func(*args, **kwargs)
-    except Exception as e:
-        exc_type, exc_value, exc_traceback = sys.exc_info()
-        tb = ''.join(traceback.format_tb(exc_traceback))
-        msg = ("`dtype` inference failed{0}.\n\n"
-               "Original error is below:\n"
-               "------------------------\n"
-               "{1}\n\n"
-               "Traceback:\n"
-               "---------\n"
-               "{2}"
-               ).format(" in `{0}`".format(funcname) if funcname else "",
-                        repr(e), tb)
-        raise ValueError(msg)
-    return o.dtype
-
-
 def map_blocks(func, *args, **kwargs):
     """ Map a function across all blocks of a dask array.
 
@@ -613,7 +593,7 @@ def map_blocks(func, *args, **kwargs):
             kwargs2 = assoc(kwargs, 'block_id', first(dsk.keys())[1:])
         else:
             kwargs2 = kwargs
-        dtype = apply_infer_dtype(func, args, kwargs2, 'map_blocks')
+        dtype = _emulate(func, *args, **kwargs2).dtype
 
     if len(arrs) == 1:
         numblocks = list(arrs[0].numblocks)
@@ -951,6 +931,14 @@ class Array(Base):
 
     def __len__(self):
         return sum(self.chunks[0])
+
+    @property
+    def _meta(self):
+        return np.ones((1,) * self.ndim, dtype=self.dtype)
+
+    @property
+    def _meta_nonempty(self):
+        return self._meta
 
     def __repr__(self):
         """
@@ -1639,7 +1627,7 @@ class Array(Base):
         else:
             raise ValueError("Order must be one of 'C' or 'F'")
 
-        out = elemwise(ascontiguousarray, self, dtype=self.dtype)
+        out = elemwise(ascontiguousarray, self)
         out = elemwise(np.ndarray.view, out, dtype, dtype=dtype)
         out._chunks = chunks
         return out
@@ -2520,9 +2508,13 @@ def elemwise(op, *args, **kwargs):
     --------
     atop
     """
+
     if not set(['name', 'dtype']).issuperset(kwargs):
         msg = "%s does not take the following keyword arguments %s"
         raise TypeError(msg % (op.__name__, str(sorted(set(kwargs) - set(['name', 'dtype'])))))
+
+    name = kwargs.pop('name', None)
+    dtype = kwargs.pop('dtype', None)
 
     shapes = [getattr(arg, 'shape', ()) for arg in args]
     shapes = [s if isinstance(s, Iterable) else () for s in shapes]
@@ -2532,32 +2524,32 @@ def elemwise(op, *args, **kwargs):
     arrays = [asarray(a) for a in args if not is_scalar_for_elemwise(a)]
     other = [(i, a) for i, a in enumerate(args) if is_scalar_for_elemwise(a)]
 
-    if 'dtype' in kwargs:
-        dt = kwargs['dtype']
-    else:
+    if dtype is None:
         # We follow NumPy's rules for dtype promotion, which special cases
         # scalars and 0d ndarrays (which it considers equivalent) by using
         # their values to compute the result dtype:
         # https://github.com/numpy/numpy/issues/6240
         # We don't inspect the values of 0d dask arrays, because these could
         # hold potentially very expensive calculations.
-        vals = [np.empty((1,) * a.ndim, dtype=a.dtype)
-                if not is_scalar_for_elemwise(a) else a
-                for a in args]
-        dt = apply_infer_dtype(op, vals, {}, 'elemwise')
+        meta = _emulate(op, *args)
+        try:
+            dtype = meta.dtype
+        except AttributeError:
+            # some ufunc (like frexp, modf) may returns multiple results as
+            # tuple use current dtype as dummy, and handle exact metadata
+            # on caller
+            dtype = arrays[0].dtype
 
-    name = kwargs.get('name', None) or '%s-%s' % (funcname(op),
-                                                  tokenize(op, dt, *args))
+    name = name or '%s-%s' % (funcname(op), tokenize(op, *args))
 
     if other:
         return atop(partial_by_order, expr_inds,
                     *concat((a, tuple(range(a.ndim)[::-1])) for a in arrays),
-                    dtype=dt, name=name, function=op, other=other,
+                    dtype=dtype, name=name, function=op, other=other,
                     token=funcname(op))
-    else:
-        return atop(op, expr_inds,
-                    *concat((a, tuple(range(a.ndim)[::-1])) for a in arrays),
-                    dtype=dt, name=name)
+    return atop(op, expr_inds,
+                *concat((a, tuple(range(a.ndim)[::-1])) for a in arrays),
+                dtype=dtype, name=name)
 
 
 @wraps(np.around)
@@ -2568,7 +2560,7 @@ def around(x, decimals=0):
 def isnull(values):
     """ pandas.isnull for dask arrays """
     import pandas as pd
-    return elemwise(pd.isnull, values, dtype='bool')
+    return elemwise(pd.isnull, values)
 
 
 def notnull(values):
@@ -2579,7 +2571,7 @@ def notnull(values):
 @wraps(numpy_compat.isclose)
 def isclose(arr1, arr2, rtol=1e-5, atol=1e-8, equal_nan=False):
     func = partial(numpy_compat.isclose, rtol=rtol, atol=atol, equal_nan=equal_nan)
-    return elemwise(func, arr1, arr2, dtype='bool')
+    return elemwise(func, arr1, arr2)
 
 
 def variadic_choose(a, *choices):
@@ -2643,7 +2635,7 @@ def coarsen(reduction, x, axes, trim_excess=False):
     chunks = tuple(tuple(int(bd // axes.get(i, 1)) for bd in bds)
                    for i, bds in enumerate(x.chunks))
 
-    dt = reduction(np.empty((1,) * x.ndim, dtype=x.dtype)).dtype
+    dt = reduction(x._meta).dtype
     return Array(merge(x.dask, dsk), name, chunks, dtype=dt)
 
 
